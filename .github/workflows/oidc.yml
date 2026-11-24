@@ -9,39 +9,17 @@ jobs:
   show:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect token endpoint response
-        env:
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      - name: Diagnose OIDC endpoint reachability
         run: |
-          set +e
-          BODY=$(curl -s -w '\n__HTTP__%{http_code}' -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=oidc-claim-probe")
-          echo "===== raw response shape ====="
-          echo "$BODY" | python3 -c '
-          import sys, json, base64
-          raw = sys.stdin.read()
-          body, _, code = raw.rpartition("\n__HTTP__")
-          print("http_status =", code or "?")
-          body = body.strip()
-          print("body_len    =", len(body))
-          if not body:
-              print("body        = <empty>"); sys.exit(0)
-          try:
-              obj = json.loads(body)
-          except Exception as e:
-              print("body is not JSON:", body[:200]); sys.exit(0)
-          print("body_keys   =", sorted(obj.keys()))
-          for k in ("count", "value", "message", "error"):
-              if k == "value": continue
-              if k in obj: print(f"{k:11} =", obj[k])
-          tok = obj.get("value")
-          if isinstance(tok, str) and tok.count(".") == 2:
-              seg = tok.split(".")[1]; seg += "=" * (-len(seg) % 4)
-              claims = json.loads(base64.urlsafe_b64decode(seg))
-              print("===== OIDC claims (selected) =====")
-              for k in ("iss", "aud", "sub", "repository", "repository_owner", "repository_owner_id",
-                        "repository_visibility", "ref", "ref_type", "event_name", "job_workflow_ref",
-                        "actor", "actor_id"):
-                  print(f"{k:22} = {claims.get(k)}")
-              print(f"{'pr.head.repo':22} = {sys.argv[1]}")
-          ' "$PR_HEAD_REPO"
+          echo "id_token_url_set   = $([ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && echo yes || echo NO)"
+          echo "id_token_tok_set   = $([ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ] && echo yes || echo NO)"
+          HOST=$(echo "$ACTIONS_ID_TOKEN_REQUEST_URL" | sed -E 's#https?://([^/]+).*#\1#')
+          echo "id_token_host      = $HOST"
+          echo "--- curl verbose (errors only) ---"
+          curl -sS -o /dev/null -w 'http=%{http_code} exit_is_next\n' \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=oidc-claim-probe" 2>&1 | tail -6
+          echo "curl_exit          = ${PIPESTATUS[0]}"
+          echo "--- control: can this runner reach the public API at all? ---"
+          curl -sS -o /dev/null -w 'api.github.com http=%{http_code}\n' https://api.github.com 2>&1 | tail -2
+          curl -sS -o /dev/null -w 'pypi.org      http=%{http_code}\n' https://pypi.org 2>&1 | tail -2
