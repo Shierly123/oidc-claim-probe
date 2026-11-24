@@ -1,11 +1,10 @@
 name: oidc-claims
 on:
   pull_request:
-    types: [opened]
+    types: [opened, synchronize]
 permissions:
-  id-token: write      # 需要它才能拿到 OIDC token
+  id-token: write
   contents: read
-  pull-requests: read  # 只为读 PR 元数据做对照
 jobs:
   show:
     runs-on: ubuntu-latest
@@ -13,15 +12,20 @@ jobs:
       - name: Print OIDC token claims
         env:
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          ACTOR: ${{ github.actor }}
-          REPO: ${{ github.repository }}
         run: |
-          TOKEN=$(curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=oidc-claim-probe" | jq -r .value)
-          echo "===== decoded OIDC payload ====="
-          echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq .
-          echo "===== event context (for comparison) ====="
-          echo "github.repository          = $REPO"
-          echo "pr.head.repo.full_name     = $PR_HEAD_REPO"
-          echo "pr.head.ref                = $PR_HEAD_REF"
-          echo "github.actor               = $ACTOR"
+          TOKEN=$(curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=oidc-claim-probe" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
+          python3 - "$TOKEN" "$PR_HEAD_REPO" <<'PY'
+          import sys, json, base64
+          tok, head_repo = sys.argv[1], sys.argv[2]
+          seg = tok.split(".")[1]
+          seg += "=" * (-len(seg) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(seg))
+          print("===== OIDC claims (selected) =====")
+          for k in ("iss", "aud", "sub", "repository", "repository_id", "repository_owner",
+                    "repository_owner_id", "repository_visibility", "ref", "ref_type",
+                    "event_name", "job_workflow_ref", "actor", "actor_id", "run_id"):
+              print(f"{k:24} = {claims.get(k)}")
+          print("===== comparison =====")
+          print(f"{'pr.head.repo':24} = {head_repo}")
+          PY
