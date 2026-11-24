@@ -1,0 +1,27 @@
+name: oidc-claims
+on:
+  pull_request:
+    types: [opened]
+permissions:
+  id-token: write      # 需要它才能拿到 OIDC token
+  contents: read
+  pull-requests: read  # 只为读 PR 元数据做对照
+jobs:
+  show:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print OIDC token claims
+        env:
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+        run: |
+          TOKEN=$(curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=oidc-claim-probe" | jq -r .value)
+          echo "===== decoded OIDC payload ====="
+          echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq .
+          echo "===== event context (for comparison) ====="
+          echo "github.repository          = $REPO"
+          echo "pr.head.repo.full_name     = $PR_HEAD_REPO"
+          echo "pr.head.ref                = $PR_HEAD_REF"
+          echo "github.actor               = $ACTOR"
