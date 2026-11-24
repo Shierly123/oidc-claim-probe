@@ -9,23 +9,39 @@ jobs:
   show:
     runs-on: ubuntu-latest
     steps:
-      - name: Print OIDC token claims
+      - name: Inspect token endpoint response
         env:
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
-          TOKEN=$(curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=oidc-claim-probe" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
-          python3 - "$TOKEN" "$PR_HEAD_REPO" <<'PY'
+          set +e
+          BODY=$(curl -s -w '\n__HTTP__%{http_code}' -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=oidc-claim-probe")
+          echo "===== raw response shape ====="
+          echo "$BODY" | python3 -c '
           import sys, json, base64
-          tok, head_repo = sys.argv[1], sys.argv[2]
-          seg = tok.split(".")[1]
-          seg += "=" * (-len(seg) % 4)
-          claims = json.loads(base64.urlsafe_b64decode(seg))
-          print("===== OIDC claims (selected) =====")
-          for k in ("iss", "aud", "sub", "repository", "repository_id", "repository_owner",
-                    "repository_owner_id", "repository_visibility", "ref", "ref_type",
-                    "event_name", "job_workflow_ref", "actor", "actor_id", "run_id"):
-              print(f"{k:24} = {claims.get(k)}")
-          print("===== comparison =====")
-          print(f"{'pr.head.repo':24} = {head_repo}")
-          PY
+          raw = sys.stdin.read()
+          body, _, code = raw.rpartition("\n__HTTP__")
+          print("http_status =", code or "?")
+          body = body.strip()
+          print("body_len    =", len(body))
+          if not body:
+              print("body        = <empty>"); sys.exit(0)
+          try:
+              obj = json.loads(body)
+          except Exception as e:
+              print("body is not JSON:", body[:200]); sys.exit(0)
+          print("body_keys   =", sorted(obj.keys()))
+          for k in ("count", "value", "message", "error"):
+              if k == "value": continue
+              if k in obj: print(f"{k:11} =", obj[k])
+          tok = obj.get("value")
+          if isinstance(tok, str) and tok.count(".") == 2:
+              seg = tok.split(".")[1]; seg += "=" * (-len(seg) % 4)
+              claims = json.loads(base64.urlsafe_b64decode(seg))
+              print("===== OIDC claims (selected) =====")
+              for k in ("iss", "aud", "sub", "repository", "repository_owner", "repository_owner_id",
+                        "repository_visibility", "ref", "ref_type", "event_name", "job_workflow_ref",
+                        "actor", "actor_id"):
+                  print(f"{k:22} = {claims.get(k)}")
+              print(f"{'pr.head.repo':22} = {sys.argv[1]}")
+          ' "$PR_HEAD_REPO"
